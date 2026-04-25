@@ -280,6 +280,16 @@ async def startup():
         log.info("Admin user seeded")
     elif not verify_password(admin_pw, existing.get("password_hash", "")):
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": hash_password(admin_pw)}})
+    # Keep admin on yearly plan with full credits regardless of test mutations
+    if existing and existing.get("plan") != "yearly":
+        await db.users.update_one(
+            {"email": admin_email},
+            {"$set": {
+                "plan": "yearly",
+                "ai_credits": PLANS["yearly"]["credits"],
+                "plan_expires_at": (datetime.now(timezone.utc) + timedelta(days=366)).isoformat(),
+            }},
+        )
 
 # ---------- Auth Routes ----------
 @api.post("/auth/register")
