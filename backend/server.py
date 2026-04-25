@@ -63,6 +63,13 @@ def init_firebase():
 # ---------- Scheduler (gentle reminders cron) ----------
 scheduler: Optional[AsyncIOScheduler] = None
 
+HABIT_LABEL = {
+    "water": "Water", "steps": "Steps", "stretch": "Stretching", "sleep": "Sleep",
+    "meditate": "Meditation", "read": "Reading", "no_sugar": "No added sugar",
+    "posture": "Posture check", "breath": "Breathing break", "screen_break": "Screen break",
+    "journal": "Journaling", "focus": "Focus time", "medication": "Medication", "workout": "Workout",
+}
+
 def _is_in_quiet_hours(now_hm: str, start: str, end: str) -> bool:
     """Check if a HH:MM time falls within a quiet window that may wrap midnight."""
     try:
@@ -152,13 +159,6 @@ async def send_scheduled_reminders():
         except Exception as e:
             log.exception(f"Scheduled push failed for user {u.get('user_id')}: {e}")
     log.info(f"Scheduled reminders: sent={sent} skipped={skipped}")
-
-HABIT_LABEL = {
-    "water": "Water", "steps": "Steps", "stretch": "Stretching", "sleep": "Sleep",
-    "meditate": "Meditation", "read": "Reading", "no_sugar": "No added sugar",
-    "posture": "Posture check", "breath": "Breathing break", "screen_break": "Screen break",
-    "journal": "Journaling", "focus": "Focus time", "medication": "Medication", "workout": "Workout",
-}
 
 # ---------- Razorpay client ----------
 _rzp_client = None

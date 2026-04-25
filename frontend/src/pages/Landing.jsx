@@ -558,7 +558,7 @@ function FAQ() {
     { q: "How are AI credits calculated?", a: "Each tier costs different credits per message — Quick=1, Daily=3, Deep=10. Free includes 30 credits/month, Monthly 600, Yearly 9000." },
     { q: "Can I cancel anytime?", a: "Yes — your subscription will not renew, and you keep access until the period ends. No questions asked." },
   ];
-  const [open, setOpen] = useState(0);
+  const [open, setOpen] = useState(-1);
   return (
     <section id="faq" className="max-w-4xl mx-auto px-5 sm:px-10 py-24">
       <Reveal>
