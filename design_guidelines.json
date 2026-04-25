@@ -1,0 +1,147 @@
+{
+  "project_name": "LifeCue AI",
+  "theme_strategy": {
+    "theme": "light",
+    "archetype": "1 (Organic & Earthy)",
+    "rationale": "Health, wellness, and habit tracking require warmth, calm, and trust. A clinical or overly gamified dark UI induces anxiety. We are optimizing for 'streaks without guilt', so the aesthetic should mimic a mindful physical journal rather than a demanding digital dashboard."
+  },
+  "typography": {
+    "pairing_rationale": "Moving away from sterile tech defaults (no Inter/Roboto). An elegant, organic serif paired with a highly legible, warm geometric sans-serif to evoke calm and premium care.",
+    "fonts": {
+      "heading": {
+        "family": "Fraunces",
+        "fallback": "serif",
+        "weights": [300, 400, 500],
+        "usage": "H1, H2, AI Coach messages, prominent numbers (like streaks or water log)."
+      },
+      "body": {
+        "family": "Manrope",
+        "fallback": "sans-serif",
+        "weights": [400, 500, 600],
+        "usage": "General UI, cards, buttons, daily tracking labels."
+      }
+    },
+    "hierarchy": {
+      "h1": "text-4xl md:text-5xl font-serif tracking-tight leading-none text-forest-900",
+      "h2": "text-2xl md:text-3xl font-serif tracking-tight text-forest-800",
+      "h3": "text-xl font-sans font-medium tracking-tight text-stone-800",
+      "body": "text-base font-sans leading-relaxed text-stone-600",
+      "caption": "text-sm font-sans tracking-wide uppercase text-stone-500"
+    }
+  },
+  "color_palette": {
+    "background": {
+      "base": "#FBF9F6",
+      "paper": "#FFFFFF",
+      "elevated": "#F4F1EC"
+    },
+    "text": {
+      "primary": "#1F2924",
+      "secondary": "#575E5A",
+      "muted": "#8A928D"
+    },
+    "brand": {
+      "forest": "#2C4A3B",
+      "sage": "#8E9E90",
+      "terracotta": "#C36B58",
+      "sand": "#DBCFB0"
+    },
+    "semantic": {
+      "success": "#768C72",
+      "warning": "#E6B87D",
+      "error": "#B85C5C",
+      "info": "#7B8C96"
+    },
+    "tailwind_config_instructions": "Extend tailwind colors with the exact hex values above under 'stone', 'forest', 'sage', 'terracotta', and 'sand'. Do not use default slate or zinc."
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous spacing. The app should feel 'quiet'. Never cram elements together.",
+    "container": "max-w-4xl mx-auto px-4 sm:px-8",
+    "grids": {
+      "habit_tracker": "grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6",
+      "bento_dashboard": "grid-cols-1 md:grid-cols-12 gap-6"
+    },
+    "padding_scale": {
+      "card": "p-6 sm:p-8",
+      "section": "py-16 sm:py-24"
+    }
+  },
+  "surface_and_borders": {
+    "cards": "bg-white rounded-[24px] border border-stone-200/60 shadow-sm",
+    "inputs": "bg-stone-50/50 rounded-2xl border border-stone-200 focus:border-sage focus:ring-1 focus:ring-sage transition-all",
+    "buttons": {
+      "primary": "bg-forest-900 text-white rounded-full px-6 py-3 hover:bg-forest-800 transition-colors shadow-sm",
+      "secondary": "bg-stone-100 text-forest-900 rounded-full px-6 py-3 hover:bg-stone-200 transition-colors",
+      "ghost": "text-stone-600 rounded-full px-4 py-2 hover:bg-stone-100 transition-colors"
+    },
+    "glass": "backdrop-blur-xl bg-white/70 border-b border-stone-200/50"
+  },
+  "components": {
+    "habit_grid": {
+      "style": "Soft, rounded rectangular cards. When completed, background changes from paper (white) to soft sage, border becomes transparent.",
+      "interaction": "One-tap state toggle. Gentle scale down on press (active:scale-95)."
+    },
+    "water_log": {
+      "layout": "Circular progress ring (stroke-sage, track-stone-100) with bold Fraunces number in center.",
+      "actions": "Big pill buttons (+250ml, +500ml) placed ergonomically for thumb reach on mobile."
+    },
+    "ai_coach": {
+      "chat_interface": "Bubble styles: User (bg-stone-100, text-primary), AI Coach (bg-sand/30, text-primary).",
+      "model_routing": "A soft 3-segment toggle switch at the top. Quick Tip (1 credit), Daily Plan (2 credits), Deep Coaching (5 credits).",
+      "credit_display": "Minimalist pill in the header: '✦ 42 credits'."
+    },
+    "smart_reminders": {
+      "style": "Dismissible cards with horizontal layout.",
+      "actions": "Three buttons side-by-side: Done (primary solid), Snooze (secondary soft), Skip (ghost). No guilt framing."
+    },
+    "streaks": {
+      "style": "No flames. No aggressive red. Use a soft terracotta badge or text. Wording should be 'You are on a 5-day flow' instead of 'Don't break the streak!'"
+    },
+    "health_integrations": {
+      "style": "Simple list of providers (Apple HealthKit, Google Health Connect) with clean toggle switches. Mocked state should look fully integrated."
+    }
+  },
+  "icons": {
+    "library": "lucide-react",
+    "style": "Set strokeWidth to 1.5 to keep them light, elegant, and non-intrusive."
+  },
+  "motion": {
+    "hover": "transition-all duration-300 ease-out",
+    "modal_enter": "animate-in fade-in zoom-in-95 duration-200",
+    "page_transition": "animate-in fade-in slide-in-from-bottom-4 duration-500"
+  },
+  "image_urls": {
+    "hero_onboarding": {
+      "url": "https://images.pexels.com/photos/6660770/pexels-photo-6660770.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Person stretching in bed with white sheets, minimal morning vibe."
+    },
+    "habit_water": {
+      "url": "https://images.pexels.com/photos/13815490/pexels-photo-13815490.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Clear glass of water on a bench, illuminated by sunlight."
+    },
+    "habit_journal": {
+      "url": "https://images.unsplash.com/photo-1710625040193-79a7728d7677?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwxfHxqb3VybmFsaW5nJTIwYWVzdGhldGljJTIwbWluaW1hbHxlbnwwfHx8fDE3NzcxMDY4MzV8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Minimal aesthetic notebook and pen."
+    },
+    "morning_routine": {
+      "url": "https://images.unsplash.com/photo-1611019708176-cc2b3e6405ff?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NjV8MHwxfHNlYXJjaHwxfHxjYWxtJTIwbW9ybmluZyUyMGNvZmZlZSUyMHN1bmxpZ2h0fGVufDB8fHx8MTc3NzEwNjgzNXww&ixlib=rb-4.1.0&q=85",
+      "description": "White ceramic mug bathed in warm sunlight."
+    },
+    "ai_coach_background": {
+      "url": "https://images.pexels.com/photos/12872929/pexels-photo-12872929.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Peaceful close-up of white sand dunes for abstract, non-intrusive backdrop."
+    }
+  },
+  "testing": {
+    "requirements": "All interactive and key informational elements MUST include a data-testid attribute (e.g., data-testid='water-add-250-button', data-testid='streak-count-text')."
+  },
+  "instructions_to_main_agent": [
+    "DO NOT use Inter, Roboto, or standard Shadcn slate/zinc colors. Use the fonts and hex codes provided here.",
+    "Make sure the Shadcn config uses `.js` files if extending components, rather than relying strictly on TS if the environment is pure JS.",
+    "The UI should feel more like a high-end editorial website than a rigid dashboard. Use generous padding, rounded corners, and soft typography.",
+    "Do not use placeholder images or fake image services. ONLY use the provided Unsplash URLs.",
+    "Mock the Apple HealthKit and Google Health Connect integrations visually, with toggle switches in the settings.",
+    "Ensure the app is fully mobile-responsive (PWA style). Essential actions should be reachable via thumb on mobile.",
+    "Build the Razorpay checkout view using the 'subscription & credits' page flow as specified in the prompt."
+  ]
+}
