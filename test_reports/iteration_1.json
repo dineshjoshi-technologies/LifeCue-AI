@@ -1,0 +1,56 @@
+{
+  "summary": "First iteration. Tested LifeCue AI backend (23 pytest cases) and frontend E2E flow (signup → onboarding → today → coach → subscription → profile → logout). 22/23 backend tests pass. Frontend basics work end-to-end EXCEPT AI Coach which is broken due to invalid model name in TIER_MODELS. Subscription page upgrade flow works at the API layer but the UI lacks data-testid on plan selection buttons (could not be triggered via testid). Onboarding habit chips and Today reminder/habit-tile buttons also lack testids. React duplicate-key warning observed on Today (likely water/habit list rendering).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/coach/chat", "issue": "AI Coach fails with 500: 'Invalid model name passed in model=gemini/gemini-2.5-flash-lite'. The model id is wrong / unsupported by the Emergent LLM gateway. Likely needs to be `gemini-2.0-flash` (or `gemini-2.0-flash-lite`). Affects all 3 tiers if same pattern; quick tier confirmed broken.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/billing/order", "issue": "Razorpay SDK import fails at runtime: 'No module named pkg_resources' (setuptools missing). Currently masked by mock-fallback, but if a real RAZORPAY_KEY_SECRET is configured later, real order creation will still fail. Add `setuptools` to requirements or use razorpay HTTP API directly."},
+      {"endpoint": "POST /api/auth/register", "issue": "Pydantic EmailStr rejects `.test` reserved TLDs — fine in production, but worth documenting."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Coach.jsx", "issue": "Sending message renders 'I couldn't reply this time. Coach unavailable: ...Invalid model name...' — propagates raw backend 500. Root cause is backend invalid model id (see backend critical).", "selector": "[data-testid=\"coach-messages\"]", "priority": "CRITICAL"},
+      {"component": "Today.jsx", "issue": "React warning: 'Encountered two children with the same key' (4x). Likely duplicate `key` in water_logs entries map or reminders list — fix React keys.", "selector": "n/a (console warning)", "priority": "MEDIUM"},
+      {"component": "Subscription.jsx", "issue": "Plan selection buttons (Monthly/Yearly upgrade CTAs) have NO data-testid (only plans-title, credits-pill, plan-faq exist). Cannot drive upgrade flow via testid in E2E.", "selector": "[data-testid=\"plan-monthly-btn\"] missing", "priority": "MEDIUM"},
+      {"component": "Onboarding.jsx", "issue": "Individual habit chips on the habits step lack data-testid (no `onboard-habit-*`). Visually clickable but not testable.", "selector": "[data-testid^=\"onboard-habit-\"] missing", "priority": "LOW"},
+      {"component": "Today.jsx", "issue": "Habit tiles and reminder Done/Snooze/Skip buttons lack individual data-testids (e.g., `habit-tile-water`, `reminder-done-*`). Buttons work via DOM order but aren't reliably targetable.", "selector": "missing testids", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "AI Coach", "issue": "Real LLM call fails for quick tier with Invalid model. Daily/Deep tiers very likely fail too (gpt-5-mini/claude-sonnet-4-5 model ids should be re-verified against Emergent gateway).", "affected_selectors": ["[data-testid=\"coach-send-btn\"]", "[data-testid=\"coach-messages\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "Today", "issues": ["Reminder action buttons (check / snooze-snowflake / X) are icon-only with no aria-label/tooltip; could hurt a11y."]},
+      {"screen": "Landing", "issues": ["Looks clean; hero contrast OK; no major issues."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_lifecue_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "FIX backend TIER_MODELS in /app/backend/server.py: replace `gemini-2.5-flash-lite` with a model id supported by the Emergent LLM gateway (e.g., `gemini-2.0-flash` or `gemini-2.0-flash-lite`). Verify `gpt-5-mini` and `claude-sonnet-4-5-20250929` are also valid for daily/deep tiers — fall back to known-good ids if not.",
+    "ADD data-testid attributes: `plan-monthly-btn`, `plan-yearly-btn` (Subscription.jsx); `onboard-habit-{key}` (Onboarding habits step); `habit-tile-{key}` (Today habits grid); `reminder-done-{id}`, `reminder-snooze-{id}`, `reminder-skip-{id}` (Today reminders).",
+    "FIX duplicate React `key` warning on Today (check water entries and reminders/habits rendering — use stable unique ids).",
+    "ADD `setuptools` to backend requirements.txt so razorpay SDK import works when real secret is configured.",
+    "FRIENDLY ERROR: When Coach call fails, show a generic friendly message instead of leaking backend exception text in `coach-messages`."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 645 lines — within limit but approaching threshold; consider splitting into routers (auth, habits, water, coach, billing).",
+    "CORS uses allow_origins=['*'] together with allow_credentials=True — browsers ignore wildcard with credentials. Use the explicit FRONTEND_URL from .env to avoid silent cookie failures across origins.",
+    "set_session_cookie uses samesite='none'; secure=True — correct for cross-site preview, but combined with CORS '*' may misbehave; tighten origins.",
+    "calc_streak runs an O(60) sequential mongo find per habit per request — add a date range query + group, or cache per request.",
+    "/api/coach/chat catches and exposes raw exception string (`str(e)[:120]`) to the client — leaks internal stack frames; replace with generic message and log the rest.",
+    "/api/billing/verify accepts any signature when secret starts with 'placeholder' — clearly intentional for dev, but ensure this branch is gated on an explicit `DEV_MODE` flag before going to production.",
+    "data-testid coverage is inconsistent — many list-rendered interactive elements (plan buttons, reminder actions, habit tiles, onboarding chips) miss testids."
+  ],
+  "updated_files": ["/app/backend/tests/test_lifecue_backend.py"],
+  "success_rate": {"backend": "95.6% (22/23 pytest)", "frontend": "85% (Coach broken, Subscription buttons untestable)"},
+  "test_credentials": "Admin: admin@lifecue.ai / Admin@2026 — confirmed working. Auto-generated test users used `e2e_<ts>@lifecueqa.com` / `TestPass@2026`.",
+  "seed_data_creation": "Admin user is auto-seeded on backend startup. Pytest creates and deletes its own TEST_ users via /api/auth/register and /api/privacy/account.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes (1) Coach model ids, (2) missing data-testids on Subscription/Onboarding/Today, (3) duplicate React keys — re-run /app/backend/tests/test_lifecue_backend.py and re-run the Playwright flow (login admin → today water → coach send → subscription monthly → profile save). Backend tests already idempotent. Email validation requires non-reserved TLDs (use lifecueqa.com).",
+  "rca of the issue": "AI Coach 500: server.py TIER_MODELS uses `gemini-2.5-flash-lite` which the Emergent LLM gateway / litellm rejects with 'Invalid model name'. The error originates inside emergentintegrations.LlmChat → litellm.completion. Reproduce: POST /api/coach/chat {message:'hi', tier:'quick'} as any authenticated user. Mitigation: change `gemini-2.5-flash-lite` to `gemini-2.0-flash` (or similar known-good id), verify daily/deep model ids, and wrap the call to return a friendly 503 instead of leaking the litellm error string."
+}
