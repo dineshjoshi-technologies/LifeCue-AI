@@ -1,0 +1,17 @@
+# Skip everything outside the frontend directory.
+# (Used only when Root Directory is the repo root. If you set Root Directory = "frontend"
+#  in Vercel project settings, this file isn't read but harmless to keep.)
+
+backend/
+memory/
+scripts/
+tests/
+test_reports/
+.pytest_cache/
+.ruff_cache/
+.emergent/
+*.md
+*.json.bak
+firebase-service-account.json
+.env
+.env.*
