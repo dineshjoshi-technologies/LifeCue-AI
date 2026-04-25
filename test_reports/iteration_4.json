@@ -1,0 +1,41 @@
+{
+  "summary": "Iter-4 testing complete. All 47 backend pytest tests passing (was 33 in iter-3; added 14 new tests covering INR pricing, yearly order, HABIT_LABEL coverage, _is_in_quiet_hours wrap-midnight, send_scheduled_reminders idempotent (called twice with no-users, no crash), 7 PWA static assets, manifest.json validity, and SEO/PWA tags in index.html). Backend startup logs show 'Firebase Admin initialized' AND 'Scheduler started: scheduled_reminders every 30 minutes'. Frontend: Landing page renders all 45 expected testids (brand-mark, hero-*, nav-*, how-step-1/2/3, feature-card-0..5, coach-tier-card-quick/daily/deep, landing-plan-free/monthly/yearly + cta, testimonial-0/1/2, faq-0..7, final-cta-*). Pricing shows ₹270 and ₹2430 (no $3/$27 remnants). Service worker registers successfully (1 active registration on origin scope). FAQ accordion expand/collapse works (faq-0 starts expanded by default; click collapses to header height ~68px, click again expands to ~132px). Subscription page after admin login renders all 3 INR plans correctly with ₹0/₹270/₹2430; admin (yearly plan) shows 'Current plan' on yearly card and 'Choose Monthly' is the only active CTA — Razorpay popup not actually fired per instructions (no real-money risk). Real Razorpay LIVE order creation verified at backend: monthly creates order_* (not order_mock_*) with amount=27000, yearly with amount=243000.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "FastAPI startup", "issue": "@app.on_event('startup') still used — DeprecationWarning shown by FastAPI; switch to lifespan event handlers per FastAPI 0.110+. Not blocking but pollutes logs."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Landing FAQ", "issues": ["faq-0 ('Is LifeCue AI a medical app?') is expanded by default while faq-1..7 are collapsed — inconsistent default state. Suggest either collapse all on first paint, or visually mark the default-open one differently. Functionally correct, just a minor UX inconsistency."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_lifecue_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Migrate backend startup to FastAPI lifespan handlers to silence DeprecationWarning.",
+    "(Optional) Decide whether faq-0 should be expanded by default on landing — currently inconsistent with the other 7 collapsed FAQs."
+  ],
+  "critical_code_review_comments": [
+    "PLANS dict uses 'price_inr' (paise) and the response separately exposes 'price_inr_display' as a hard-coded literal (270, 2430) instead of deriving it from price_inr/100. Minor duplication risk: if paise value is ever changed but display literal isn't, they desync. Suggest computing display in the response builder: `price_inr_display: PLANS[id]['price_inr'] // 100`.",
+    "send_scheduled_reminders does `init_firebase()` on every cron tick — that's idempotent (returns cached _fb_app) but still does a None-check; safe. Note: HABIT_LABEL is referenced inside send_scheduled_reminders BEFORE its module-level definition (line 130 references it; HABIT_LABEL declared on line 156). Python module-load order means at runtime this is fine because send_scheduled_reminders is only called via scheduler/test AFTER full module load — but it's a footgun if anyone refactors. Consider moving HABIT_LABEL above the function.",
+    "server.py is now ~927 lines — well past the 700-line threshold. Splitting into routers (auth, habits, water, coach, billing, push, scheduler, privacy) would improve maintainability and is overdue.",
+    "CORS still uses allow_origins=['*'] with allow_credentials=True (carryover from iter-2/3). Browsers ignore wildcard with credentials — only works because Bearer tokens are also accepted. Tighten to FRONTEND_URL before production cutover.",
+    "Service worker (/sw.js) is registered via inline script in index.html which is good, but there's no version/cache-bust mechanism — new deploys may serve stale assets to PWA users until SW update propagates. Consider adding workbox-style cache versioning or skipWaiting + clientsClaim with a build-time version stamp."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_lifecue_backend.py — Replaced billing test to assert price_inr=27000/243000 + price_inr_display=270/2430 + no price_usd field; added test_order_yearly_creates_real_razorpay_order (amount=243000); added TestSchedulerAndLabels class (HABIT_LABEL 14-key coverage, _is_in_quiet_hours wrap-midnight, send_scheduled_reminders idempotent twice); added TestPwaAssets class (7 parametrized static-asset checks + manifest validity + index.html SEO/PWA tag check). 33 → 47 tests."
+  ],
+  "success_rate": {"backend": "100% (47/47 pytest)", "frontend": "100% (45/45 testids present, INR pricing rendered, SW registered, FAQ accordion working, no console errors beyond known React Router future-flag warnings + 1 expected /api/auth/me 401 on unauthenticated landing)"},
+  "test_credentials": "Admin: admin@lifecue.ai / Admin@2026 (verified). Test users auto-created as TEST_<hex>@lifecueqa.com / TestPass@2026 (cleaned up via /api/privacy/account).",
+  "seed_data_creation": "No new seeds. Pytest fixtures create and tear down their own users.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend test count is now 47 in /app/backend/tests/test_lifecue_backend.py covering: health, auth (8), onboarding/settings (2), habits (2), water (1), reminders (2), coach all 3 tiers (4 — consume real Emergent LLM credits ~14/run from admin), billing in PRODUCTION mode (5 — real LIVE Razorpay orders, do NOT verify with real signatures), push/FCM (6), iter-4 scheduler+labels (3 — directly imports server module to test HABIT_LABEL/_is_in_quiet_hours/send_scheduled_reminders), iter-4 PWA assets (9 incl parametrized), privacy (2). APP_ENV is 'production' — Razorpay LIVE keys in use. Frontend bundle is currently in sync with the preview URL (no rebuild needed). Razorpay popup was NOT triggered in this iteration per safety instructions. send_scheduled_reminders was called twice live against the real DB with no crash; if there are real users with push_enabled=true and pending habits + outside quiet hours, this WILL fire a real FCM push to them — be cautious in repeated runs.",
+  "rca of the issue": "No new bugs found. Iter-3's CORS-on-login bug (stale REACT_APP_BACKEND_URL in CRA bundle) did NOT recur — login worked first try in this iteration. Backend pytest's stale 'amount=24900' assertion (carryover from earlier USD pricing) was updated to amount=27000 to match the new INR-only PLANS dict (₹270 monthly = 27000 paise, ₹2430 yearly = 243000 paise)."
+}

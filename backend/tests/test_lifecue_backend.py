@@ -269,20 +269,34 @@ class TestBilling:
         assert r.status_code == 200
         d = r.json()
         assert "plans" in d and len(d["plans"]) == 3
-        ids = {p["id"] for p in d["plans"]}
-        assert ids == {"free", "monthly", "yearly"}
+        plans_by_id = {p["id"]: p for p in d["plans"]}
+        assert set(plans_by_id.keys()) == {"free", "monthly", "yearly"}
         assert "razorpay_key_id" in d
-        # In production / iter-3 the key MUST be a real LIVE key
         assert d["razorpay_key_id"].startswith("rzp_live_"), f"Expected live key, got {d['razorpay_key_id']}"
+        # Iter-4: INR-only pricing with price_inr_display field
+        m = plans_by_id["monthly"]
+        assert m["price_inr"] == 27000, f"monthly paise: {m['price_inr']}"
+        assert m["price_inr_display"] == 270, f"monthly display: {m['price_inr_display']}"
+        assert m["currency"] == "INR"
+        y = plans_by_id["yearly"]
+        assert y["price_inr"] == 243000, f"yearly paise: {y['price_inr']}"
+        assert y["price_inr_display"] == 2430, f"yearly display: {y['price_inr_display']}"
+        assert y["currency"] == "INR"
+        f = plans_by_id["free"]
+        assert f["price_inr"] == 0
+        assert f["price_inr_display"] == 0
+        # Old USD field must be gone
+        for p in d["plans"]:
+            assert "price_usd" not in p, f"Plan {p['id']} still has price_usd"
 
-    def test_order_creates_real_razorpay_order(self, test_user):
+    def test_order_monthly_creates_real_razorpay_order(self, test_user):
         """In APP_ENV=production with real Razorpay client, order_id must be a real
         Razorpay order id (prefix 'order_') and NOT a mock fallback ('order_mock_')."""
         s = test_user["session"]
         r = s.post(f"{API}/billing/order", json={"plan": "monthly"})
         assert r.status_code == 200, r.text
         d = r.json()
-        assert d["amount"] == 24900
+        assert d["amount"] == 27000  # ₹270 in paise
         assert d["plan"] == "monthly"
         assert d["currency"] == "INR"
         assert d["key_id"].startswith("rzp_live_")
@@ -291,6 +305,17 @@ class TestBilling:
         assert not oid.startswith("order_mock_"), (
             f"Got mock order in production mode: {oid} — Razorpay client did not initialize"
         )
+
+    def test_order_yearly_creates_real_razorpay_order(self, test_user):
+        s = test_user["session"]
+        r = s.post(f"{API}/billing/order", json={"plan": "yearly"})
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["amount"] == 243000  # ₹2430 in paise
+        assert d["plan"] == "yearly"
+        assert d["currency"] == "INR"
+        oid = d["order_id"]
+        assert oid.startswith("order_") and not oid.startswith("order_mock_")
 
     def test_verify_rejects_forged_signature_for_real_order(self, test_user):
         """Forge a signature for a real order_id — must be rejected with 400."""
@@ -389,6 +414,85 @@ class TestPush:
         r = s.post(f"{API}/push/unregister", json={"token": tok})
         assert r.status_code == 200
         assert r.json().get("ok") is True
+
+
+# ---------- Iter-4: Scheduler & HABIT_LABEL ----------
+class TestSchedulerAndLabels:
+    def test_habit_label_covers_all_14_keys(self):
+        """HABIT_LABEL must cover all 14 catalog habits."""
+        from server import HABIT_LABEL
+        expected = {"water", "steps", "stretch", "sleep", "meditate", "read", "no_sugar",
+                    "posture", "breath", "screen_break", "journal", "focus", "medication", "workout"}
+        missing = expected - set(HABIT_LABEL.keys())
+        assert not missing, f"HABIT_LABEL missing keys: {missing}"
+        # Sanity: catalog keys should all be in HABIT_LABEL
+        cat = requests.get(f"{API}/habits/catalog").json()
+        catalog_keys = {h["key"] for h in cat}
+        assert catalog_keys.issubset(set(HABIT_LABEL.keys())), \
+            f"Catalog keys not in HABIT_LABEL: {catalog_keys - set(HABIT_LABEL.keys())}"
+
+    def test_quiet_hours_helper_wraps_midnight(self):
+        from server import _is_in_quiet_hours
+        # 22:00 -> 07:00 wrap
+        assert _is_in_quiet_hours("23:30", "22:00", "07:00") is True
+        assert _is_in_quiet_hours("06:30", "22:00", "07:00") is True
+        assert _is_in_quiet_hours("12:00", "22:00", "07:00") is False
+        # Non-wrap
+        assert _is_in_quiet_hours("13:00", "12:00", "14:00") is True
+        assert _is_in_quiet_hours("15:00", "12:00", "14:00") is False
+        # Equal start/end => disabled
+        assert _is_in_quiet_hours("12:00", "10:00", "10:00") is False
+
+    def test_send_scheduled_reminders_callable_idempotent(self):
+        """The cron entry-point must be safe to call directly without crashing
+        even if zero users match (idempotent)."""
+        import asyncio
+        from server import send_scheduled_reminders
+        # Should not raise
+        asyncio.get_event_loop().run_until_complete(send_scheduled_reminders())
+        # Second call also fine
+        asyncio.get_event_loop().run_until_complete(send_scheduled_reminders())
+
+
+# ---------- Iter-4: PWA static assets ----------
+class TestPwaAssets:
+    @pytest.mark.parametrize("path,content_type_hint", [
+        ("/manifest.json", "json"),
+        ("/sw.js", "javascript"),
+        ("/firebase-messaging-sw.js", "javascript"),
+        ("/icon-192.png", "image"),
+        ("/icon-512.png", "image"),
+        ("/apple-touch-icon.png", "image"),
+        ("/favicon.ico", None),
+    ])
+    def test_pwa_asset_reachable(self, path, content_type_hint):
+        r = requests.get(f"{BASE_URL}{path}", timeout=15)
+        assert r.status_code == 200, f"{path} returned {r.status_code}"
+        if content_type_hint:
+            ct = r.headers.get("content-type", "").lower()
+            assert content_type_hint in ct, f"{path} unexpected content-type: {ct}"
+
+    def test_manifest_json_valid(self):
+        r = requests.get(f"{BASE_URL}/manifest.json")
+        assert r.status_code == 200
+        m = r.json()
+        assert "name" in m or "short_name" in m
+        assert "icons" in m and isinstance(m["icons"], list) and len(m["icons"]) >= 1
+        sizes = {i.get("sizes") for i in m["icons"]}
+        assert "192x192" in sizes and "512x512" in sizes
+
+    def test_index_html_seo_and_pwa_tags(self):
+        r = requests.get(f"{BASE_URL}/")
+        assert r.status_code == 200
+        html = r.text
+        assert "<title>" in html and "LifeCue" in html
+        assert 'name="description"' in html
+        assert 'property="og:title"' in html
+        assert 'name="twitter:card"' in html
+        assert 'rel="manifest"' in html
+        assert 'rel="apple-touch-icon"' in html
+        # 3 JSON-LD scripts
+        assert html.count('application/ld+json') >= 3
 
 
 # ---------- Privacy ----------

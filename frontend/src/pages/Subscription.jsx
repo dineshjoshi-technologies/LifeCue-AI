@@ -97,7 +97,7 @@ export default function Subscription() {
       <div className="animate-slide-up mb-8">
         <div className="text-xs uppercase tracking-widest text-stone-500">Plans</div>
         <h1 className="font-serif text-4xl text-forest-900 mt-1" data-testid="plans-title">Two prices. Many small wins.</h1>
-        <p className="text-stone-500 mt-2">Currency shown in INR (Razorpay test). Approx USD pricing — $3/mo or $27/yr.</p>
+        <p className="text-stone-500 mt-2">Billed in INR via Razorpay secure checkout. Cancel anytime.</p>
       </div>
 
       <div className="grid md:grid-cols-3 gap-5">
@@ -116,11 +116,11 @@ export default function Subscription() {
                 )}
               </div>
               <div className="mt-4 flex items-baseline gap-1">
-                <span className="font-serif text-5xl">${p.price_usd}</span>
+                <span className="font-serif text-5xl">₹{p.price_inr_display ?? Math.round((p.price_inr || 0) / 100)}</span>
                 <span className="text-sm opacity-70">{p.id === "monthly" ? "/mo" : p.id === "yearly" ? "/yr" : ""}</span>
               </div>
               <div className={`text-xs mt-1 ${highlight ? "opacity-70" : "text-stone-500"}`}>
-                {p.price_inr > 0 ? `≈ ₹${(p.price_inr / 100).toFixed(0)} INR` : "Free forever"}
+                {p.price_inr > 0 ? `${p.credits_monthly} AI credits` : "Free forever · 30 credits / mo"}
               </div>
               <ul className="mt-6 space-y-2">
                 {p.features.map((f) => (

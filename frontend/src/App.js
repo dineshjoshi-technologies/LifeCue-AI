@@ -2,6 +2,7 @@ import React from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider, useAuth } from "./lib/auth";
+import PwaInstallPrompt from "./components/PwaInstallPrompt";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -76,6 +77,7 @@ export default function App() {
           }}
         />
         <AppRouter />
+        <PwaInstallPrompt />
       </BrowserRouter>
     </AuthProvider>
   );

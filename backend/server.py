@@ -25,6 +25,9 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 import firebase_admin
 from firebase_admin import credentials as fb_credentials, messaging as fb_messaging
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+
 # ---------- Config ----------
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGO = "HS256"
@@ -56,6 +59,106 @@ def init_firebase():
             log.warning(f"Firebase init failed: {e}")
             _fb_app = None
     return _fb_app
+
+# ---------- Scheduler (gentle reminders cron) ----------
+scheduler: Optional[AsyncIOScheduler] = None
+
+def _is_in_quiet_hours(now_hm: str, start: str, end: str) -> bool:
+    """Check if a HH:MM time falls within a quiet window that may wrap midnight."""
+    try:
+        n = _hm_to_min(now_hm)
+        s = _hm_to_min(start)
+        e = _hm_to_min(end)
+    except Exception:
+        return False
+    if s == e:
+        return False
+    if s < e:
+        return s <= n < e
+    # wraps midnight, e.g. 22:00 -> 07:00
+    return n >= s or n < e
+
+def _hm_to_min(s: str) -> int:
+    h, m = s.split(":")
+    return int(h) * 60 + int(m)
+
+async def send_scheduled_reminders():
+    """Iterate active users; send a single calm push if they have pending habits and are outside quiet hours."""
+    init_firebase()
+    if _fb_app is None:
+        return
+    now = datetime.now(timezone.utc)
+    now_hm = now.strftime("%H:%M")
+    today = now.date().isoformat()
+    cooldown_iso = (now - timedelta(hours=3)).isoformat()
+    sent = 0
+    skipped = 0
+    cursor = db.users.find(
+        {"push_enabled": True, "onboarded": True},
+        {"_id": 0, "user_id": 1, "name": 1, "selected_habits": 1, "quiet_hours_start": 1, "quiet_hours_end": 1, "last_push_at": 1, "water_goal_ml": 1},
+    )
+    async for u in cursor:
+        try:
+            qs = u.get("quiet_hours_start") or "22:00"
+            qe = u.get("quiet_hours_end") or "07:00"
+            if _is_in_quiet_hours(now_hm, qs, qe):
+                skipped += 1
+                continue
+            last = u.get("last_push_at")
+            if last and last > cooldown_iso:
+                skipped += 1
+                continue
+            # Build a gentle message
+            selected = u.get("selected_habits") or []
+            done_keys = set()
+            async for d in db.habit_logs.find({"user_id": u["user_id"], "date": today, "completed": True}, {"_id": 0, "habit_key": 1}):
+                done_keys.add(d["habit_key"])
+            pending = [h for h in selected if h not in done_keys]
+            water_total = 0
+            async for w in db.water_logs.find({"user_id": u["user_id"], "date": today}, {"_id": 0, "amount_ml": 1}):
+                water_total += w.get("amount_ml", 0)
+            water_goal = u.get("water_goal_ml", 2500) or 2500
+            water_pending = water_total < water_goal
+            if not pending and not water_pending:
+                skipped += 1
+                continue
+            first = u.get("name", "friend").split(" ")[0] if u.get("name") else "friend"
+            if water_pending and (len(pending) == 0 or "water" in pending):
+                title = "A gentle sip"
+                body = f"Hi {first} — {water_goal - water_total}ml away from today's flow."
+            else:
+                label = HABIT_LABEL.get(pending[0], pending[0])
+                title = "A small cue"
+                body = f"Hi {first} — a moment for {label.lower()}?"
+            tokens = []
+            async for t in db.push_tokens.find({"user_id": u["user_id"]}, {"_id": 0, "token": 1}):
+                tokens.append(t["token"])
+            if not tokens:
+                continue
+            for tok in tokens:
+                try:
+                    msg = fb_messaging.Message(
+                        notification=fb_messaging.Notification(title=title, body=body),
+                        data={"kind": "scheduled", "ts": now.isoformat()},
+                        token=tok,
+                    )
+                    fb_messaging.send(msg)
+                    sent += 1
+                except Exception as e:
+                    err = str(e).lower()
+                    if "registration-token-not-registered" in err or "invalid-argument" in err:
+                        await db.push_tokens.delete_one({"user_id": u["user_id"], "token": tok})
+            await db.users.update_one({"user_id": u["user_id"]}, {"$set": {"last_push_at": now.isoformat()}})
+        except Exception as e:
+            log.exception(f"Scheduled push failed for user {u.get('user_id')}: {e}")
+    log.info(f"Scheduled reminders: sent={sent} skipped={skipped}")
+
+HABIT_LABEL = {
+    "water": "Water", "steps": "Steps", "stretch": "Stretching", "sleep": "Sleep",
+    "meditate": "Meditation", "read": "Reading", "no_sugar": "No added sugar",
+    "posture": "Posture check", "breath": "Breathing break", "screen_break": "Screen break",
+    "journal": "Journaling", "focus": "Focus time", "medication": "Medication", "workout": "Workout",
+}
 
 # ---------- Razorpay client ----------
 _rzp_client = None
@@ -210,8 +313,8 @@ DEFAULT_HABITS = [
 
 PLANS = {
     "free": {"price_inr": 0, "credits": 30, "label": "Free"},
-    "monthly": {"price_inr": 24900, "credits": 600, "label": "Monthly", "duration_days": 31},  # ₹249 ≈ $3
-    "yearly": {"price_inr": 224900, "credits": 9000, "label": "Yearly", "duration_days": 366},  # ₹2249 ≈ $27
+    "monthly": {"price_inr": 27000, "credits": 600, "label": "Monthly", "duration_days": 31},   # ₹270
+    "yearly":  {"price_inr": 243000, "credits": 9000, "label": "Yearly", "duration_days": 366}, # ₹2430
 }
 
 TIER_COSTS = {"quick": 1, "daily": 3, "deep": 10}
@@ -253,6 +356,13 @@ async def startup():
     await db.payments.create_index("order_id")
     await db.push_tokens.create_index([("user_id", 1), ("token", 1)], unique=True)
     init_firebase()
+    # Start scheduled reminders cron
+    global scheduler
+    if scheduler is None:
+        scheduler = AsyncIOScheduler(timezone="UTC")
+        scheduler.add_job(send_scheduled_reminders, CronTrigger(minute="*/30"), id="scheduled_reminders", replace_existing=True)
+        scheduler.start()
+        log.info("Scheduler started: scheduled_reminders every 30 minutes")
     # seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@lifecue.ai").lower()
     admin_pw = os.environ.get("ADMIN_PASSWORD", "Admin@2026")
@@ -628,9 +738,9 @@ async def coach_history(session_id: Optional[str] = None, user: dict = Depends(g
 async def billing_plans():
     return {
         "plans": [
-            {"id": "free", "label": "Free", "price_inr": 0, "price_usd": 0, "credits_monthly": PLANS["free"]["credits"], "features": ["3 habit slots", "30 AI credits / month", "Smart reminders"]},
-            {"id": "monthly", "label": "Monthly", "price_inr": PLANS["monthly"]["price_inr"], "price_usd": 3, "credits_monthly": PLANS["monthly"]["credits"], "features": ["All habit slots", "600 AI credits", "Deep coaching access", "Priority reminders"]},
-            {"id": "yearly", "label": "Yearly", "price_inr": PLANS["yearly"]["price_inr"], "price_usd": 27, "credits_monthly": PLANS["yearly"]["credits"], "features": ["All habit slots", "9000 AI credits / year", "Deep coaching access", "Save 25% vs monthly"]},
+            {"id": "free", "label": "Free", "price_inr": 0, "price_inr_display": 0, "currency": "INR", "credits_monthly": PLANS["free"]["credits"], "features": ["3 habit slots", "30 AI credits / month", "Smart reminders"]},
+            {"id": "monthly", "label": "Monthly", "price_inr": PLANS["monthly"]["price_inr"], "price_inr_display": 270, "currency": "INR", "credits_monthly": PLANS["monthly"]["credits"], "features": ["All habit slots", "600 AI credits", "Deep coaching access", "Push & voice reminders"]},
+            {"id": "yearly",  "label": "Yearly",  "price_inr": PLANS["yearly"]["price_inr"],  "price_inr_display": 2430, "currency": "INR", "credits_monthly": PLANS["yearly"]["credits"],  "features": ["All habit slots", "9000 AI credits / year", "Deep coaching access", "Save 25% vs monthly"]},
         ],
         "razorpay_key_id": RAZORPAY_KEY_ID,
         "currency": "INR",

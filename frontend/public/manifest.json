@@ -1,0 +1,17 @@
+{
+  "short_name": "LifeCue",
+  "name": "LifeCue AI — gentle daily wellness coach",
+  "description": "A quiet daily companion for water, rest, breathing, and the small habits that hold a day together. AI coaching, smart reminders, and streaks without guilt.",
+  "icons": [
+    { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any maskable" }
+  ],
+  "start_url": "/today",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#2C4A3B",
+  "background_color": "#FBF9F6",
+  "categories": ["health", "lifestyle", "productivity"],
+  "screenshots": []
+}
