@@ -93,10 +93,10 @@ export default function Today() {
               Nothing for now. The day is yours.
             </div>
           )}
-          {reminders.map((r) => {
+          {reminders.map((r, idx) => {
             const Icon = pickIcon(r.icon);
             return (
-              <div key={r.id} data-testid={`reminder-${r.id}`} className="card-soft p-5 flex items-center gap-4">
+              <div key={`${r.id}-${idx}`} data-testid={`reminder-${r.id}`} className="card-soft p-5 flex items-center gap-4">
                 <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${r.tone === "sage" ? "bg-sage-100" : "bg-sand-100"}`}>
                   <Icon size={20} strokeWidth={1.5} className="text-forest-700" />
                 </div>
@@ -105,13 +105,13 @@ export default function Today() {
                   <div className="text-sm text-stone-500 truncate">{r.body}</div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => reminderAction(r, "done")} className="btn-primary !px-3 !py-2 text-sm" data-testid={`reminder-done-${r.id}`} title="Done">
+                  <button onClick={() => reminderAction(r, "done")} className="btn-primary !px-3 !py-2 text-sm" data-testid={`reminder-done-btn-${r.kind}`} aria-label={`Mark ${r.title} done`}>
                     <Check size={14} strokeWidth={1.5} />
                   </button>
-                  <button onClick={() => reminderAction(r, "snooze")} className="btn-secondary !px-3 !py-2 text-sm" data-testid={`reminder-snooze-${r.id}`} title="Snooze">
+                  <button onClick={() => reminderAction(r, "snooze")} className="btn-secondary !px-3 !py-2 text-sm" data-testid={`reminder-snooze-btn-${r.kind}`} aria-label={`Snooze ${r.title}`}>
                     <Snowflake size={14} strokeWidth={1.5} />
                   </button>
-                  <button onClick={() => reminderAction(r, "skip")} className="btn-ghost !px-3 !py-2 text-sm" data-testid={`reminder-skip-${r.id}`} title="Skip">
+                  <button onClick={() => reminderAction(r, "skip")} className="btn-ghost !px-3 !py-2 text-sm" data-testid={`reminder-skip-btn-${r.kind}`} aria-label={`Skip ${r.title}`}>
                     <X size={14} strokeWidth={1.5} />
                   </button>
                 </div>

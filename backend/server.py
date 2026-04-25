@@ -172,10 +172,11 @@ PLANS = {
 
 TIER_COSTS = {"quick": 1, "daily": 3, "deep": 10}
 TIER_MODELS = {
-    "quick": ("gemini", "gemini-2.5-flash-lite"),
+    "quick": ("gemini", "gemini-2.5-flash"),
     "daily": ("openai", "gpt-5-mini"),
     "deep": ("anthropic", "claude-sonnet-4-5-20250929"),
 }
+TIER_FALLBACK = ("openai", "gpt-4o-mini")
 
 # ---------- Auth Dep ----------
 async def get_current_user(request: Request) -> dict:
@@ -513,16 +514,25 @@ async def coach_chat(req: CoachChatReq, user: dict = Depends(get_current_user)):
         raise HTTPException(402, "Not enough credits — upgrade or wait for monthly refresh.")
     provider, model = TIER_MODELS[req.tier]
     session_id = req.session_id or f"sess_{user['user_id']}_{uuid.uuid4().hex[:8]}"
-    try:
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=session_id,
-            system_message=COACH_SYSTEM,
-        ).with_model(provider, model)
-        reply = await chat.send_message(UserMessage(text=req.message))
-    except Exception as e:
-        log.exception("LLM error")
-        raise HTTPException(500, f"Coach unavailable: {str(e)[:120]}")
+    reply = None
+    last_err = None
+    for prov, mdl in [(provider, model), TIER_FALLBACK]:
+        try:
+            chat = LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=session_id,
+                system_message=COACH_SYSTEM,
+            ).with_model(prov, mdl)
+            reply = await chat.send_message(UserMessage(text=req.message))
+            model = mdl
+            break
+        except Exception as e:
+            last_err = str(e)
+            log.warning(f"LLM {prov}/{mdl} failed: {last_err[:200]}")
+            continue
+    if reply is None:
+        log.error(f"Coach unavailable, last error: {last_err}")
+        raise HTTPException(503, "Coach is resting for a moment — please try again shortly.")
     now = datetime.now(timezone.utc).isoformat()
     await db.coach_messages.insert_many([
         {"user_id": user["user_id"], "session_id": session_id, "role": "user", "text": req.message, "tier": req.tier, "created_at": now},

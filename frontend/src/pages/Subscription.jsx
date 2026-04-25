@@ -142,7 +142,7 @@ export default function Subscription() {
                   </div>
                 ) : (
                   <button onClick={() => startCheckout(p.id)} disabled={busy === p.id}
-                    data-testid={`plan-buy-${p.id}`}
+                    data-testid={`plan-buy-${p.id}-btn`}
                     className={`w-full py-3 rounded-full font-medium transition-all ${
                       highlight ? "bg-paper text-forest-900 hover:bg-sand-100" : "bg-forest-700 text-paper hover:bg-forest-800"
                     } disabled:opacity-50`}>

@@ -226,6 +226,36 @@ class TestCoach:
         assert d["credits_left"] == before - 1
         assert d["tier"] == "quick"
 
+    def test_coach_daily_chat(self, test_user):
+        s = test_user["session"]
+        before = s.get(f"{API}/auth/me").json()["ai_credits"]
+        r = s.post(f"{API}/coach/chat", json={"message": "Give me a short focus tip.", "tier": "daily"})
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert isinstance(d["reply"], str) and len(d["reply"]) > 0
+        assert d["credits_used"] == 3
+        assert d["credits_left"] == before - 3
+        assert d["tier"] == "daily"
+
+    def test_coach_deep_chat(self, test_user):
+        s = test_user["session"]
+        # Top up credits via mock upgrade so deep tier (10) is affordable
+        o = s.post(f"{API}/billing/order", json={"plan": "monthly"}).json()
+        s.post(f"{API}/billing/verify", json={
+            "razorpay_order_id": o["order_id"],
+            "razorpay_payment_id": "pay_mock_topup",
+            "razorpay_signature": "mock_sig",
+            "plan": "monthly",
+        })
+        before = s.get(f"{API}/auth/me").json()["ai_credits"]
+        r = s.post(f"{API}/coach/chat", json={"message": "Plan a calm evening routine.", "tier": "deep"})
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert isinstance(d["reply"], str) and len(d["reply"]) > 0
+        assert d["credits_used"] == 10
+        assert d["credits_left"] == before - 10
+        assert d["tier"] == "deep"
+
     def test_coach_history(self, test_user):
         s = test_user["session"]
         r = s.get(f"{API}/coach/history")

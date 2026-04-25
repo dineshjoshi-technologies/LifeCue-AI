@@ -47,10 +47,7 @@ export default function Coach() {
     } catch (e) {
       const msg = formatErr(e.response?.data?.detail) || e.message;
       toast.error(msg);
-      if (e.response?.status === 402) {
-        // not enough credits — link to subscription
-      }
-      setMessages((m) => [...m, { role: "assistant", text: "I couldn't reply this time. " + msg, tier, error: true }]);
+      setMessages((m) => [...m, { role: "assistant", text: "I'm taking a quiet breath — please try again in a moment.", tier, error: true }]);
     } finally {
       setBusy(false);
     }

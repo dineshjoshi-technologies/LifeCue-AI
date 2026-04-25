@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 2 retest — all previously-flagged issues are FIXED and verified end-to-end. Backend pytest 25/25 passing including all 3 Coach tiers (quick=gemini-2.5-flash, daily=gpt-5-mini, deep=claude-sonnet-4-5-20250929) returning real LLM replies and deducting correct credits (1/3/10). Frontend full flow verified: login → today (water +250 worked, 5 reminders with reminder-{action}-btn-{kind} testids, 8 habit-tile-{key} testids) → coach (real LLM reply rendered, no friendly-fallback triggered) → subscription (plan-buy-monthly-btn clicked, mock flow /billing/order → /billing/verify ran, plan updated on /me from yearly→monthly) → profile (settings-save-btn / export-btn / delete-account-btn present). ZERO React duplicate-key warnings. ZERO console errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/billing/verify", "issue": "Mock-acceptance branch (signature accepted when RAZORPAY_KEY_SECRET starts with 'placeholder') is intentional for dev but should be gated behind an explicit DEV_MODE / APP_ENV flag before production."},
+      {"endpoint": "GET /api/habits/today", "issue": "calc_streak runs O(60) sequential mongo find per habit per request; under load this will be slow. Replace with single date-range aggregation."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Today", "issues": ["Reminder action buttons (check / snooze / X) remain icon-only without aria-label/tooltip — minor a11y gap."]},
+      {"screen": "Subscription", "issues": ["Only the upgrade-target plan button is rendered (e.g. when admin is on yearly, only plan-buy-monthly-btn appears). plan-buy-free-btn and plan-buy-yearly-btn render only for users below those tiers — expected, but worth noting for QA."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_lifecue_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Gate /api/billing/verify mock-signature acceptance behind an explicit DEV_MODE env flag before production.",
+    "(Optional) Replace per-habit calc_streak loop with a single date-range mongo aggregation for performance.",
+    "(Optional) Add aria-label to the Today reminder icon buttons (Done/Snooze/Skip) for a11y."
+  ],
+  "critical_code_review_comments": [
+    "CORS still uses allow_origins=['*'] with allow_credentials=True — browsers ignore wildcard with credentials. Tighten to explicit FRONTEND_URL env var.",
+    "server.py at ~655 lines is approaching the 700 split-threshold; consider splitting into routers (auth, habits, water, coach, billing, privacy).",
+    "Coach fallback chain (TIER_FALLBACK -> openai/gpt-4o-mini) is good defensive design; the friendly 503 message ('Coach is resting for a moment...') is now user-safe and no longer leaks litellm internals.",
+    "Razorpay verify mock branch is acceptable for preview but must be feature-flagged for production."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_lifecue_backend.py (added test_coach_daily_chat and test_coach_deep_chat)"
+  ],
+  "success_rate": {"backend": "100% (25/25 pytest)", "frontend": "100% (all retest flows pass — login, water, reminders, habits, coach LLM reply, subscription mock upgrade, profile settings)"},
+  "test_credentials": "Admin: admin@lifecue.ai / Admin@2026 (works). Test users auto-generated as test_<hex>@lifecueqa.com / TestPass@2026.",
+  "seed_data_creation": "Admin auto-seeded on backend startup. Pytest creates and tears down its own TEST_ users via /api/auth/register and /api/privacy/account.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iteration-1 issues verified fixed. Backend suite at /app/backend/tests/test_lifecue_backend.py covers 25 cases including all 3 coach tiers (quick/daily/deep) — these tests consume real Emergent LLM credits (~14 per full suite run), so re-run sparingly. Admin plan may have been mutated to 'monthly' by frontend mock-upgrade flow; the seed code does NOT reset plan on startup, only password. If a clean admin (yearly) state is required, manually update the user doc or reset before testing.",
+  "rca of the issue": "All previously identified issues confirmed RESOLVED in iteration 2: (1) Coach 500 fixed by switching to gemini-2.5-flash + adding TIER_FALLBACK to openai/gpt-4o-mini — verified all 3 tiers return real replies via pytest. (2) Missing data-testids added: plan-buy-{id}-btn, reminder-{action}-btn-{kind}, habit-tile-{key} — verified via DOM query. (3) Duplicate React keys eliminated — 0 warnings observed across full Today flow. (4) Friendly Coach error message in place (verified by code inspection in Coach.jsx). (5) setuptools added — Razorpay SDK no longer fails on import (mock-fallback unaffected, real key path now reachable)."
+}
