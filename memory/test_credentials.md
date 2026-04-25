@@ -13,17 +13,34 @@
 
 ## Auth Endpoints
 - `POST /api/auth/register` — email/password signup
-- `POST /api/auth/login` — email/password login (returns user + token, sets session_token cookie)
+- `POST /api/auth/login` — email/password login (sets session_token cookie)
 - `POST /api/auth/google/session` — exchange Emergent OAuth `session_id` for JWT cookie
-- `GET  /api/auth/me` — current user (requires session_token cookie or Bearer token)
+- `GET  /api/auth/me` — current user
 - `POST /api/auth/logout` — clears cookie
 
-## Razorpay (test mode)
-- KEY_ID: `rzp_test_RDgL1ziRcwIWDX`  (placeholder — replace with real test key)
-- KEY_SECRET: placeholder — actual order creation falls back to mock orders (`order_mock_*`).
-- Verify endpoint accepts mock orders for development testing.
-- Test card (when secret is real): `4111 1111 1111 1111`, any future expiry, any CVV.
+## Razorpay (LIVE mode — real money)
+- KEY_ID: `rzp_live_ShhTjgkbdBWbqN`
+- KEY_SECRET: configured in `/app/backend/.env`
+- WEBHOOK_SECRET: not configured yet (set on Razorpay dashboard → Settings → Webhooks)
+- APP_ENV: `production` (DEV_MODE off — mock orders/signatures REJECTED)
+- For testing without real charges: temporarily switch APP_ENV=dev to allow `order_mock_*` flow.
+
+## Firebase Cloud Messaging (Web Push)
+- Service account: `/app/backend/firebase-service-account.json` (project: `lifecueai`)
+- Web SDK config: in `/app/frontend/.env`
+- VAPID public key: in `/app/frontend/.env`
+- Service worker: `/app/frontend/public/firebase-messaging-sw.js`
+- Endpoints:
+  - `POST /api/push/register` — register a device FCM token
+  - `POST /api/push/unregister` — remove a device token
+  - `POST /api/push/test` — send a test push to all of caller's devices
+
+## Voice Reminders (Web Speech API)
+- No keys needed. Browser-based TTS via `window.speechSynthesis`.
+- Toggle on Profile → "Voice-style smart reminders".
+- Auto-spoken on Today when reminders appear; manual "Read aloud" button on each reminder card.
 
 ## Notes
-- Cookies use `samesite=none; secure=true; httponly=true` so frontend must use `withCredentials: true`.
+- Cookies use `samesite=none; secure=true; httponly=true`.
 - Database: `lifecue_ai` on `MONGO_URL`.
+- `APP_ENV` controls payment behavior: `production` rejects mock; `dev`/`development`/`preview` allows mock orders for testing.

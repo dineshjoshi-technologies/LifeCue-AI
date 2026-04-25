@@ -1,9 +1,10 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Layout from "../components/Layout";
-import { api } from "../lib/api";
+import { api, formatErr } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { LogOut, Download, Trash2, Apple, Watch, Shield } from "lucide-react";
+import { LogOut, Download, Trash2, Apple, Watch, Shield, Bell, BellRing } from "lucide-react";
+import { isPushSupported, requestPushPermissionAndGetToken } from "../lib/push";
 import toast from "react-hot-toast";
 
 export default function Profile() {
@@ -15,6 +16,35 @@ export default function Profile() {
   const [voice, setVoice] = useState(!!user?.voice_reminders_enabled);
   const [apple, setApple] = useState(!!user?.health_apple);
   const [google, setGoogle] = useState(!!user?.health_google);
+  const [pushSupported, setPushSupported] = useState(false);
+  const [pushOn, setPushOn] = useState(!!user?.push_enabled);
+  const [pushBusy, setPushBusy] = useState(false);
+
+  useEffect(() => { isPushSupported().then(setPushSupported); }, []);
+
+  const enablePush = async () => {
+    setPushBusy(true);
+    try {
+      const token = await requestPushPermissionAndGetToken();
+      await api.post("/push/register", { token, platform: "web" });
+      setPushOn(true);
+      await refresh();
+      toast.success("Notifications on");
+    } catch (e) {
+      toast.error(e.message || "Could not enable notifications");
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const sendTestPush = async () => {
+    try {
+      const { data } = await api.post("/push/test", { title: "A gentle test", body: "If you're seeing this, your cues are working." });
+      toast.success(`Sent to ${data.sent}/${data.total} devices`);
+    } catch (e) {
+      toast.error(formatErr(e.response?.data?.detail) || e.message);
+    }
+  };
 
   const save = async () => {
     await api.patch("/settings", {
@@ -77,9 +107,36 @@ export default function Profile() {
                   className="input-soft mt-1" data-testid="settings-quiet-end" />
               </label>
             </div>
-            <Toggle label="Voice-style smart reminders" sub="Plays a soft spoken cue (browser only)" value={voice} onChange={setVoice} testid="toggle-voice" />
+            <Toggle label="Voice-style smart reminders" sub="Plays a soft spoken cue (in-browser, free)" value={voice} onChange={setVoice} testid="toggle-voice" />
           </div>
           <button onClick={save} className="btn-primary mt-6" data-testid="settings-save-btn">Save preferences</button>
+        </section>
+
+        <section className="card-soft p-7" data-testid="push-section">
+          <h2 className="font-serif text-xl text-forest-900">Push notifications</h2>
+          <p className="text-stone-500 text-sm mt-1">Get gentle nudges even when LifeCue is closed.</p>
+          {!pushSupported ? (
+            <div className="mt-5 text-sm text-stone-500" data-testid="push-not-supported">
+              Push isn't supported in this browser. Try Chrome, Edge, or Firefox on desktop.
+            </div>
+          ) : (
+            <div className="mt-5 space-y-3">
+              {!pushOn ? (
+                <button onClick={enablePush} disabled={pushBusy} className="btn-primary disabled:opacity-50" data-testid="push-enable-btn">
+                  <Bell size={14} strokeWidth={1.5} /> {pushBusy ? "Asking your browser…" : "Turn on notifications"}
+                </button>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2 text-sm text-forest-800" data-testid="push-status-on">
+                    <BellRing size={14} strokeWidth={1.5} className="text-sage-500" /> Notifications are on for this device
+                  </div>
+                  <button onClick={sendTestPush} className="btn-secondary" data-testid="push-test-btn">
+                    Send a test cue
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </section>
 
         <section className="card-soft p-7" data-testid="health-section">

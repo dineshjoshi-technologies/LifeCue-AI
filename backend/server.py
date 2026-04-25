@@ -22,6 +22,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
+import firebase_admin
+from firebase_admin import credentials as fb_credentials, messaging as fb_messaging
+
 # ---------- Config ----------
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGO = "HS256"
@@ -30,9 +33,41 @@ DB_NAME = os.environ["DB_NAME"]
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+APP_ENV = os.environ.get("APP_ENV", "production").lower()
+DEV_MODE = APP_ENV in ("dev", "development", "preview")
+FIREBASE_SERVICE_ACCOUNT_PATH = os.environ.get("FIREBASE_SERVICE_ACCOUNT_PATH", "")
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("lifecue")
+
+# ---------- Firebase Admin (FCM) ----------
+_fb_app = None
+def init_firebase():
+    global _fb_app
+    if _fb_app is not None:
+        return _fb_app
+    if FIREBASE_SERVICE_ACCOUNT_PATH and os.path.exists(FIREBASE_SERVICE_ACCOUNT_PATH):
+        try:
+            cred = fb_credentials.Certificate(FIREBASE_SERVICE_ACCOUNT_PATH)
+            _fb_app = firebase_admin.initialize_app(cred)
+            log.info("Firebase Admin initialized")
+        except Exception as e:
+            log.warning(f"Firebase init failed: {e}")
+            _fb_app = None
+    return _fb_app
+
+# ---------- Razorpay client ----------
+_rzp_client = None
+def get_rzp():
+    global _rzp_client
+    if _rzp_client is None and RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
+        try:
+            import razorpay
+            _rzp_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        except Exception as e:
+            log.warning(f"Razorpay client init failed: {e}")
+    return _rzp_client
 
 # ---------- DB ----------
 mongo_client = AsyncIOMotorClient(MONGO_URL)
@@ -108,8 +143,17 @@ class SettingsReq(BaseModel):
     quiet_hours_start: Optional[str] = None
     quiet_hours_end: Optional[str] = None
     voice_reminders_enabled: Optional[bool] = None
+    push_enabled: Optional[bool] = None
     health_apple: Optional[bool] = None
     health_google: Optional[bool] = None
+
+class PushTokenReq(BaseModel):
+    token: str
+    platform: str = "web"
+
+class SendTestPushReq(BaseModel):
+    title: Optional[str] = "A gentle cue"
+    body: Optional[str] = "Time for a small sip of water."
 
 # ---------- Helpers ----------
 def hash_password(pw: str) -> str:
@@ -207,6 +251,8 @@ async def startup():
     await db.habit_logs.create_index([("user_id", 1), ("date", 1), ("habit_key", 1)], unique=True)
     await db.coach_messages.create_index([("user_id", 1), ("session_id", 1), ("created_at", 1)])
     await db.payments.create_index("order_id")
+    await db.push_tokens.create_index([("user_id", 1), ("token", 1)], unique=True)
+    init_firebase()
     # seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@lifecue.ai").lower()
     admin_pw = os.environ.get("ADMIN_PASSWORD", "Admin@2026")
@@ -425,9 +471,7 @@ async def habits_today_for(user_id: str):
     logs = {}
     async for doc in db.habit_logs.find({"user_id": user_id, "date": d}, {"_id": 0}):
         logs[doc["habit_key"]] = doc["completed"]
-    streaks = {}
-    for k in selected:
-        streaks[k] = await calc_streak(user_id, k)
+    streaks = await calc_streaks_bulk(user_id, selected)
     return {
         "date": d,
         "selected": selected,
@@ -436,20 +480,37 @@ async def habits_today_for(user_id: str):
         "streaks": streaks,
     }
 
-async def calc_streak(user_id: str, habit_key: str) -> int:
-    streak = 0
+async def calc_streaks_bulk(user_id: str, habit_keys: List[str]) -> dict:
+    """Single date-range query then walk back per-habit. O(N log N) instead of O(60*K)."""
+    if not habit_keys:
+        return {}
     today = datetime.now(timezone.utc).date()
-    for i in range(0, 60):
-        d = (today - timedelta(days=i)).isoformat()
-        doc = await db.habit_logs.find_one({"user_id": user_id, "date": d, "habit_key": habit_key, "completed": True}, {"_id": 0})
-        if doc:
-            streak += 1
-        else:
-            if i == 0:
-                # today not done yet, but streak can still be from yesterday
-                continue
-            break
-    return streak
+    start = (today - timedelta(days=60)).isoformat()
+    end = today.isoformat()
+    completed = {k: set() for k in habit_keys}
+    async for doc in db.habit_logs.find(
+        {"user_id": user_id, "habit_key": {"$in": habit_keys}, "date": {"$gte": start, "$lte": end}, "completed": True},
+        {"_id": 0, "habit_key": 1, "date": 1},
+    ):
+        completed[doc["habit_key"]].add(doc["date"])
+    out = {}
+    for k in habit_keys:
+        s = 0
+        days = completed[k]
+        for i in range(0, 61):
+            d = (today - timedelta(days=i)).isoformat()
+            if d in days:
+                s += 1
+            else:
+                if i == 0:
+                    continue
+                break
+        out[k] = s
+    return out
+
+async def calc_streak(user_id: str, habit_key: str) -> int:
+    res = await calc_streaks_bulk(user_id, [habit_key])
+    return res.get(habit_key, 0)
 
 # ---------- Reminders ----------
 @api.get("/reminders/today")
@@ -570,15 +631,22 @@ async def billing_order(req: CreateOrderReq, user: dict = Depends(get_current_us
     plan = PLANS[req.plan]
     amount = plan["price_inr"]
     receipt = f"lc_{user['user_id'][:10]}_{uuid.uuid4().hex[:6]}"
-    try:
-        import razorpay
-        client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-        order = client.order.create({"amount": amount, "currency": "INR", "receipt": receipt, "payment_capture": 1})
-        order_id = order["id"]
-    except Exception as e:
-        # Fallback for placeholder/test secret — generate a mock order id so UI still works in dev
-        log.warning(f"Razorpay order create failed, using mock: {e}")
+    rzp = get_rzp()
+    if rzp is None:
+        if not DEV_MODE:
+            raise HTTPException(503, "Payments are temporarily unavailable. Please try again later.")
         order_id = f"order_mock_{uuid.uuid4().hex[:14]}"
+        log.warning("Razorpay client not initialized — using mock order (DEV_MODE)")
+    else:
+        try:
+            order = rzp.order.create({"amount": amount, "currency": "INR", "receipt": receipt, "payment_capture": 1})
+            order_id = order["id"]
+        except Exception as e:
+            log.exception("Razorpay order create failed")
+            if DEV_MODE:
+                order_id = f"order_mock_{uuid.uuid4().hex[:14]}"
+            else:
+                raise HTTPException(502, f"Could not create order: {str(e)[:120]}")
     await db.payments.insert_one({
         "order_id": order_id,
         "user_id": user["user_id"],
@@ -593,16 +661,18 @@ async def billing_order(req: CreateOrderReq, user: dict = Depends(get_current_us
 
 @api.post("/billing/verify")
 async def billing_verify(req: VerifyPaymentReq, user: dict = Depends(get_current_user)):
-    """Verify HMAC signature; on success, upgrade plan."""
+    """Verify HMAC signature. Mock acceptance only in DEV_MODE."""
     is_mock = req.razorpay_order_id.startswith("order_mock_")
-    valid = False
-    if not is_mock and RAZORPAY_KEY_SECRET and not RAZORPAY_KEY_SECRET.startswith("placeholder"):
+    if is_mock:
+        if not DEV_MODE:
+            raise HTTPException(400, "Invalid order")
+        valid = True
+    else:
+        if not RAZORPAY_KEY_SECRET:
+            raise HTTPException(503, "Payment verification unavailable")
         body = f"{req.razorpay_order_id}|{req.razorpay_payment_id}".encode()
         expected = hmac.new(RAZORPAY_KEY_SECRET.encode(), body, hashlib.sha256).hexdigest()
         valid = hmac.compare_digest(expected, req.razorpay_signature)
-    else:
-        # In dev/test mode without a working secret, accept the call (still records payment)
-        valid = True
     if not valid:
         raise HTTPException(400, "Invalid signature")
     plan = PLANS[req.plan]
@@ -626,6 +696,88 @@ async def billing_verify(req: VerifyPaymentReq, user: dict = Depends(get_current
     )
     fresh = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0, "password_hash": 0})
     return {"ok": True, "user": fresh}
+
+@api.post("/billing/webhook")
+async def billing_webhook(request: Request):
+    """Razorpay webhook — verifies signature against RAZORPAY_WEBHOOK_SECRET."""
+    body = await request.body()
+    signature = request.headers.get("x-razorpay-signature", "")
+    if not RAZORPAY_WEBHOOK_SECRET:
+        log.warning("Webhook received but RAZORPAY_WEBHOOK_SECRET not set; ignoring")
+        return {"status": "ignored"}
+    expected = hmac.new(RAZORPAY_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(400, "Invalid webhook signature")
+    try:
+        payload = json.loads(body.decode())
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    event = payload.get("event")
+    pay = (payload.get("payload") or {}).get("payment", {}).get("entity", {})
+    order_id = pay.get("order_id")
+    if order_id:
+        await db.payments.update_one(
+            {"order_id": order_id},
+            {"$set": {"webhook_event": event, "webhook_received_at": datetime.now(timezone.utc).isoformat()}},
+        )
+    return {"status": "processed", "event": event}
+
+# ---------- Push Notifications (FCM) ----------
+@api.post("/push/register")
+async def push_register(req: PushTokenReq, user: dict = Depends(get_current_user)):
+    if not req.token or len(req.token) < 20:
+        raise HTTPException(400, "Invalid token")
+    await db.push_tokens.update_one(
+        {"user_id": user["user_id"], "token": req.token},
+        {"$set": {
+            "user_id": user["user_id"],
+            "token": req.token,
+            "platform": req.platform,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+        upsert=True,
+    )
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"push_enabled": True}})
+    return {"ok": True}
+
+@api.post("/push/unregister")
+async def push_unregister(req: PushTokenReq, user: dict = Depends(get_current_user)):
+    await db.push_tokens.delete_one({"user_id": user["user_id"], "token": req.token})
+    return {"ok": True}
+
+@api.post("/push/test")
+async def push_test(req: SendTestPushReq, user: dict = Depends(get_current_user)):
+    """Send a test push to all of this user's registered devices."""
+    init_firebase()
+    if _fb_app is None:
+        raise HTTPException(503, "Push service unavailable on server")
+    tokens = []
+    async for doc in db.push_tokens.find({"user_id": user["user_id"]}, {"_id": 0, "token": 1}):
+        tokens.append(doc["token"])
+    if not tokens:
+        raise HTTPException(400, "No devices registered for push")
+    try:
+        # Send individually since send_each_for_multicast may not be available in all versions
+        sent = 0
+        failed = []
+        for tok in tokens:
+            try:
+                msg = fb_messaging.Message(
+                    notification=fb_messaging.Notification(title=req.title, body=req.body),
+                    data={"kind": "test", "ts": datetime.now(timezone.utc).isoformat()},
+                    token=tok,
+                )
+                fb_messaging.send(msg)
+                sent += 1
+            except Exception as e:
+                failed.append({"token": tok[:20] + "…", "error": str(e)[:120]})
+                # Clean up invalid token
+                if "registration-token-not-registered" in str(e).lower() or "invalid-argument" in str(e).lower():
+                    await db.push_tokens.delete_one({"user_id": user["user_id"], "token": tok})
+        return {"sent": sent, "total": len(tokens), "failed": failed}
+    except Exception as e:
+        log.exception("FCM send failed")
+        raise HTTPException(500, f"Push failed: {str(e)[:120]}")
 
 # ---------- Privacy ----------
 @api.get("/privacy/export")

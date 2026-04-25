@@ -1,9 +1,11 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import Layout from "../components/Layout";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { Plus, Check, Snowflake, X, Sparkles } from "lucide-react";
+import { Plus, Check, Snowflake, X, Sparkles, Volume2 } from "lucide-react";
 import { pickIcon } from "./Onboarding";
+import { speakReminder } from "../lib/speech";
+import { onForegroundMessage } from "../lib/push";
 import toast from "react-hot-toast";
 
 export default function Today() {
@@ -11,6 +13,7 @@ export default function Today() {
   const [water, setWater] = useState(null);
   const [habits, setHabits] = useState(null);
   const [reminders, setReminders] = useState([]);
+  const lastSpokenRef = useRef(null);
 
   const load = useCallback(async () => {
     const [w, h, r] = await Promise.all([
@@ -24,6 +27,31 @@ export default function Today() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Voice reminder: when reminders update and voice opt-in is on, gently speak the first one (once per id).
+  useEffect(() => {
+    if (!user?.voice_reminders_enabled) return;
+    if (!reminders.length) return;
+    const first = reminders[0];
+    if (lastSpokenRef.current === first.id) return;
+    lastSpokenRef.current = first.id;
+    // Brief delay so the page paints first
+    const t = setTimeout(() => {
+      speakReminder(`${first.title}. ${first.body}`);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [reminders, user?.voice_reminders_enabled]);
+
+  // Foreground push notifications -> toast
+  useEffect(() => {
+    let unsub = () => {};
+    onForegroundMessage((payload) => {
+      const t = payload?.notification?.title || "LifeCue";
+      const b = payload?.notification?.body || "A gentle nudge.";
+      toast(`${t} — ${b}`, { icon: "🌿" });
+    }).then((u) => { if (typeof u === "function") unsub = u; });
+    return () => unsub();
+  }, []);
 
   const addWater = async (amount_ml) => {
     const { data } = await api.post("/water/log", { amount_ml });
@@ -105,6 +133,12 @@ export default function Today() {
                   <div className="text-sm text-stone-500 truncate">{r.body}</div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {user?.voice_reminders_enabled && (
+                    <button onClick={() => speakReminder(`${r.title}. ${r.body}`)}
+                      className="btn-ghost !px-3 !py-2 text-sm" data-testid={`reminder-speak-btn-${r.kind}`} aria-label="Read aloud">
+                      <Volume2 size={14} strokeWidth={1.5} />
+                    </button>
+                  )}
                   <button onClick={() => reminderAction(r, "done")} className="btn-primary !px-3 !py-2 text-sm" data-testid={`reminder-done-btn-${r.kind}`} aria-label={`Mark ${r.title} done`}>
                     <Check size={14} strokeWidth={1.5} />
                   </button>

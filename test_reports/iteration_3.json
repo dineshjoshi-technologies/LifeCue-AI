@@ -1,0 +1,45 @@
+{
+  "summary": "Iter-3 testing complete. Backend pytest 33/34 passing (single failure was admin plan mutation carryover from iter-2 — reset and verified). All 4 new phase-2 features verified working: (a) Razorpay LIVE (rzp_live_*) with APP_ENV=production creates REAL order_ids (not order_mock_*), verify endpoint correctly REJECTS forged signatures (400) and rejects 'order_mock_*' ids (400); webhook returns 200 'ignored' without secret. (b) calc_streaks_bulk works (single date-range query, today endpoint returns correct streaks dict). (c) Voice TTS code path runs without errors when voice_reminders_enabled=true; 5 reminder-speak-btn-{kind} testids render on /today; auto-speak first-reminder useEffect fires with 0 page errors. (d) FCM push fully wired: /push/register saves token, sets user.push_enabled=true, rejects <20-char tokens, requires auth; /push/test returns 400 'No devices registered' for fresh user, returns sent=0+failed[] for fake token (no crash); /push/unregister works. Firebase Admin initialized in backend logs. Frontend Profile page shows push-section + push-enable-btn; firebase-messaging-sw.js served at /firebase-messaging-sw.js (200 OK).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "Razorpay client init", "issue": "On a freshly reloaded backend process the Razorpay SDK occasionally fails with 'No module named pkg_resources' (visible in backend.err.log) which would force a 503 in production mode. Eventually re-init succeeds and order creation passes. Recommend adding 'setuptools' to requirements.txt as a hard dep (already in iter-2 fix list) and consider importing razorpay at startup so this surfaces immediately rather than on first /billing/order call."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "All authenticated frontend flows", "issue": "Frontend bundle had a STALE REACT_APP_BACKEND_URL baked at build time pointing to 'https://habit-coach-ai-11.preview.emergentagent.com' instead of the current preview host. Caused CORS failure ('Something went wrong') on every login attempt. Fixed by restarting frontend supervisor (CRA picked up the current /app/frontend/.env on rebuild). Main agent should ensure CI/build pipeline reads the correct env at build time, or document the supervisorctl restart frontend step after .env changes.", "affected_selectors": ["login form", "all /api/* fetches"]}
+    ],
+    "design_issues": [
+      {"screen": "Profile", "issues": ["Push notifications card has empty whitespace below 'Turn on notifications' button — minor visual imbalance vs Daily-preferences card height."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_lifecue_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Document or automate: after editing /app/frontend/.env, run 'sudo supervisorctl restart frontend' so CRA rebuilds with the current REACT_APP_BACKEND_URL (the bundle had a stale URL on test start).",
+    "Add 'setuptools' to backend/requirements.txt to eliminate the intermittent 'No module named pkg_resources' Razorpay-init warning (production-mode 503 fallback risk).",
+    "(Optional) Reset admin plan to 'yearly' on backend startup if the seed admin's plan has been mutated below yearly (or document that test-only mock upgrades persist)."
+  ],
+  "critical_code_review_comments": [
+    "DEV_MODE gating on /billing/order and /billing/verify is correctly implemented (mock fallback only when APP_ENV in dev/development/preview). Verified production rejects both forged sigs and order_mock_* ids with 400.",
+    "calc_streaks_bulk replaces the per-habit O(60) sequential mongo find loop with a single date-range query — major perf improvement; correctness validated by /habits/today returning the streaks dict identical in shape to the previous implementation.",
+    "/push/test correctly handles failed FCM sends (try/except per token, cleans up registration-token-not-registered errors). However the 'invalid-argument' branch in cleanup currently matches case-insensitively on str(e) which may also match unrelated errors — consider matching on FCM error.code instead.",
+    "/billing/webhook returns 200 'ignored' when RAZORPAY_WEBHOOK_SECRET is empty — this is documented behavior but worth a log.warning EVERY call (currently logs once) so accidentally-unsecured webhooks are visible in prod logs.",
+    "CORS still uses allow_origins=['*'] with allow_credentials=True (carryover from iter-2). Browsers ignore wildcard with credentials — works in preview only because cookies are not strictly required (Bearer token also accepted). Tighten to explicit FRONTEND_URL env var before production cutover.",
+    "server.py is now 807 lines — exceeds the 700-line split threshold. Consider splitting into routers (auth, habits, water, coach, billing, push, privacy)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_lifecue_backend.py (replaced mock-billing test with 5 production-mode tests: real-order, forged-sig-reject, mock-id-reject, webhook-ignored, plus 6 new TestPush cases; switched test_coach_deep_chat to use admin_session since fresh users can no longer mock-upgrade)"
+  ],
+  "success_rate": {"backend": "100% (33/33 pytest after admin plan reset; 34/34 if admin starts as yearly)", "frontend": "100% (login, today reminders+TTS testids, profile push section, SW reachable, 0 console errors)"},
+  "test_credentials": "Admin: admin@lifecue.ai / Admin@2026 (verified). Test users auto-created as test_<hex>@lifecueqa.com / TestPass@2026. Note: admin plan was reset to yearly + 9000 credits via direct mongo update during this iteration to fix iter-2 mutation carryover.",
+  "seed_data_creation": "No new seeds. Pytest creates and tears down its own TEST_-prefixed users via /api/auth/register and /api/privacy/account.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend at /app/backend/tests/test_lifecue_backend.py now has 34 tests covering: health, auth (8), onboarding/settings (2), habits (2), water (1), reminders (2), coach all 3 tiers (4 — these consume real Emergent LLM credits ~14/run), billing in PRODUCTION mode (5), push/FCM (6), privacy (2). Re-run sparingly. APP_ENV is 'production'; do NOT run /billing/verify with real signatures (would charge real money). Razorpay LIVE keys are configured. Firebase Admin works (lifecueai project). If frontend ever shows 'Something went wrong' on login again, first check the served bundle for the correct REACT_APP_BACKEND_URL — supervisor restart of frontend fixes it.",
+  "rca of the issue": "(1) Frontend CORS-on-login bug RCA: CRA bakes REACT_APP_BACKEND_URL at build time. The frontend container was started before the current /app/frontend/.env was written (or .env was overwritten with the new preview URL after the dev server started). The compiled bundle still pointed to the previous preview host 'habit-coach-ai-11.preview.emergentagent.com' so all /api/* calls were cross-origin and blocked by CORS. Mitigation: 'sudo supervisorctl restart frontend' triggers CRA to re-read the .env and serve the bundle with the current URL — verified working post-restart. Permanent fix: add a startup check that compares process.env.REACT_APP_BACKEND_URL with window.location.origin and warns, OR document the restart-frontend-after-.env-change requirement. (2) test_admin_login intermittent failure RCA: iter-2 frontend test exercised the mock-upgrade flow against admin which mutated admin.plan from 'yearly' to 'monthly' in mongo. Seed code only re-syncs password, not plan. Fixed by direct mongo update; recommend extending seed_admin to also reset plan/credits if drifted."
+}

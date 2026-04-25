@@ -237,17 +237,12 @@ class TestCoach:
         assert d["credits_left"] == before - 3
         assert d["tier"] == "daily"
 
-    def test_coach_deep_chat(self, test_user):
-        s = test_user["session"]
-        # Top up credits via mock upgrade so deep tier (10) is affordable
-        o = s.post(f"{API}/billing/order", json={"plan": "monthly"}).json()
-        s.post(f"{API}/billing/verify", json={
-            "razorpay_order_id": o["order_id"],
-            "razorpay_payment_id": "pay_mock_topup",
-            "razorpay_signature": "mock_sig",
-            "plan": "monthly",
-        })
+    def test_coach_deep_chat(self, admin_session):
+        # Use admin (yearly plan, 9000 credits) so deep tier (10) is affordable in production mode
+        s = admin_session
         before = s.get(f"{API}/auth/me").json()["ai_credits"]
+        if before < 10:
+            pytest.skip(f"Admin has insufficient credits ({before}) for deep tier")
         r = s.post(f"{API}/coach/chat", json={"message": "Plan a calm evening routine.", "tier": "deep"})
         assert r.status_code == 200, r.text
         d = r.json()
@@ -267,7 +262,7 @@ class TestCoach:
             assert msgs[-1]["role"] in ["user", "assistant"]
 
 
-# ---------- Billing ----------
+# ---------- Billing (LIVE Razorpay / production mode) ----------
 class TestBilling:
     def test_plans(self):
         r = requests.get(f"{API}/billing/plans")
@@ -277,29 +272,123 @@ class TestBilling:
         ids = {p["id"] for p in d["plans"]}
         assert ids == {"free", "monthly", "yearly"}
         assert "razorpay_key_id" in d
+        # In production / iter-3 the key MUST be a real LIVE key
+        assert d["razorpay_key_id"].startswith("rzp_live_"), f"Expected live key, got {d['razorpay_key_id']}"
 
-    def test_order_and_verify_mock_upgrades_user(self, test_user):
+    def test_order_creates_real_razorpay_order(self, test_user):
+        """In APP_ENV=production with real Razorpay client, order_id must be a real
+        Razorpay order id (prefix 'order_') and NOT a mock fallback ('order_mock_')."""
         s = test_user["session"]
         r = s.post(f"{API}/billing/order", json={"plan": "monthly"})
         assert r.status_code == 200, r.text
         d = r.json()
         assert d["amount"] == 24900
         assert d["plan"] == "monthly"
-        order_id = d["order_id"]
-        # Mock fallback expected
-        assert order_id.startswith("order_mock_") or order_id.startswith("order_")
-        # Verify (mock signature accepted in dev)
+        assert d["currency"] == "INR"
+        assert d["key_id"].startswith("rzp_live_")
+        oid = d["order_id"]
+        assert oid.startswith("order_"), f"Bad order_id: {oid}"
+        assert not oid.startswith("order_mock_"), (
+            f"Got mock order in production mode: {oid} — Razorpay client did not initialize"
+        )
+
+    def test_verify_rejects_forged_signature_for_real_order(self, test_user):
+        """Forge a signature for a real order_id — must be rejected with 400."""
+        s = test_user["session"]
+        o = s.post(f"{API}/billing/order", json={"plan": "monthly"}).json()
+        oid = o["order_id"]
+        assert oid.startswith("order_") and not oid.startswith("order_mock_")
         v = s.post(f"{API}/billing/verify", json={
-            "razorpay_order_id": order_id,
-            "razorpay_payment_id": "pay_mock_test",
+            "razorpay_order_id": oid,
+            "razorpay_payment_id": "pay_FORGED_test",
+            "razorpay_signature": "deadbeef" * 8,
+            "plan": "monthly",
+        })
+        assert v.status_code == 400, f"Expected 400 for forged sig, got {v.status_code}: {v.text}"
+
+    def test_verify_rejects_mock_order_id_in_production(self, test_user):
+        """A client-supplied 'order_mock_*' id must be rejected with 400 when DEV_MODE is off."""
+        s = test_user["session"]
+        v = s.post(f"{API}/billing/verify", json={
+            "razorpay_order_id": "order_mock_abcdef0123456789",
+            "razorpay_payment_id": "pay_mock_x",
             "razorpay_signature": "mock_signature",
             "plan": "monthly",
         })
-        assert v.status_code == 200, v.text
-        vd = v.json()
-        assert vd["ok"] is True
-        assert vd["user"]["plan"] == "monthly"
-        assert vd["user"]["ai_credits"] == 600
+        assert v.status_code == 400, f"Expected 400 rejecting mock in prod, got {v.status_code}: {v.text}"
+
+    def test_webhook_no_secret_returns_ignored(self):
+        """Without RAZORPAY_WEBHOOK_SECRET configured, webhook returns 200 'ignored'."""
+        r = requests.post(
+            f"{API}/billing/webhook",
+            data=b'{"event":"payment.captured"}',
+            headers={"Content-Type": "application/json", "x-razorpay-signature": "irrelevant"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json().get("status") == "ignored"
+
+
+# ---------- Push Notifications (FCM) ----------
+class TestPush:
+    def test_push_register_requires_auth(self):
+        r = requests.post(f"{API}/push/register", json={"token": "x" * 30, "platform": "web"})
+        assert r.status_code == 401
+
+    def test_push_register_rejects_short_token(self, test_user):
+        s = test_user["session"]
+        r = s.post(f"{API}/push/register", json={"token": "abc", "platform": "web"})
+        assert r.status_code == 400
+
+    def test_push_register_and_user_flag(self, test_user):
+        s = test_user["session"]
+        fake_token = "fake_fcm_token_" + uuid.uuid4().hex  # > 20 chars
+        r = s.post(f"{API}/push/register", json={"token": fake_token, "platform": "web"})
+        assert r.status_code == 200, r.text
+        assert r.json().get("ok") is True
+        # user.push_enabled flips to True
+        me = s.get(f"{API}/auth/me").json()
+        assert me.get("push_enabled") is True
+
+    def test_push_test_with_no_devices(self):
+        """Fresh user with no registered tokens -> 400 'No devices registered for push'."""
+        s = requests.Session()
+        s.headers.update({"Content-Type": "application/json"})
+        email = f"TEST_push_nodev_{uuid.uuid4().hex[:6]}@lifecueqa.com"
+        reg = s.post(f"{API}/auth/register", json={"email": email, "password": "secret123", "name": "PushNoDev"})
+        assert reg.status_code == 200
+        s.headers.update({"Authorization": f"Bearer {reg.json()['token']}"})
+        r = s.post(f"{API}/push/test", json={})
+        assert r.status_code == 400, r.text
+        assert "no devices" in r.text.lower()
+        # cleanup
+        s.delete(f"{API}/privacy/account")
+
+    def test_push_test_with_fake_token_returns_failed(self):
+        """Register a fake token, then /push/test should return sent=0 with a failed entry (FCM rejects)."""
+        s = requests.Session()
+        s.headers.update({"Content-Type": "application/json"})
+        email = f"TEST_push_fake_{uuid.uuid4().hex[:6]}@lifecueqa.com"
+        reg = s.post(f"{API}/auth/register", json={"email": email, "password": "secret123", "name": "PushFake"})
+        assert reg.status_code == 200
+        s.headers.update({"Authorization": f"Bearer {reg.json()['token']}"})
+        fake = "fake_fcm_token_" + uuid.uuid4().hex + "_padding_to_be_long_enough"
+        s.post(f"{API}/push/register", json={"token": fake, "platform": "web"})
+        r = s.post(f"{API}/push/test", json={})
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["sent"] == 0
+        assert d["total"] >= 1
+        assert isinstance(d["failed"], list) and len(d["failed"]) >= 1
+        # cleanup
+        s.delete(f"{API}/privacy/account")
+
+    def test_push_unregister(self, test_user):
+        s = test_user["session"]
+        tok = "fake_unreg_" + uuid.uuid4().hex + "_padding_long"
+        s.post(f"{API}/push/register", json={"token": tok, "platform": "web"})
+        r = s.post(f"{API}/push/unregister", json={"token": tok})
+        assert r.status_code == 200
+        assert r.json().get("ok") is True
 
 
 # ---------- Privacy ----------
